@@ -1,0 +1,110 @@
+function fitness = ObjectiveFunction(CH_positions, nodePositions, BS_positions, nodeEnergy, networkDim, weights, packetSize, Eelec, Eamp, xi_free, d0, N)
+% CH_positions: indices of selected cluster heads (1 x m)
+% nodePositions: Nx2 coordinates of all nodes
+% BS_positions: base station coordinates (1x2 or 2x2 for dual BS)
+% nodeEnergy: Nx1 remaining energy of all nodes
+% networkDim: network area dimension (e.g., 250)
+% weights: 1x5 weight vector for fitness components
+% Energy parameters: packetSize (bits), Eelec, Eamp, xi_free, d0
+
+CH_positions = round(CH_positions); % Safety adjustment
+CH_positions(CH_positions < 1) = 1;
+CH_positions(CH_positions > N) = N;
+CH_positions = unique(CH_positions);  % Prevent duplicated CH selection
+
+m = length(CH_positions);
+N = size(nodePositions,1);
+
+%% --- wf1: 1 / remaining energy of CHs (energy awareness) ---
+wf1 = 0;
+for i = 1:m
+    id = CH_positions(i);
+    if nodeEnergy(id) <= 0
+        wf1 = wf1 + 1e6;  % Penalty for dead CH
+    else
+        wf1 = wf1 + 1 / nodeEnergy(id);
+    end
+end
+
+%% --- wf2: total distance of each node to the nearest CH (coverage efficiency) ---
+wf2 = 0;
+for i = 1:N
+    minDist = inf;
+    for j = 1:m
+        ch_id = CH_positions(j);
+        d = norm(nodePositions(i,:) - nodePositions(ch_id,:));
+        if d < minDist
+            minDist = d;
+        end
+    end
+    wf2 = wf2 + minDist;
+end
+
+%% --- wf3: total distance between CHs and the nearest BS (BS proximity) ---
+wf3 = 0;
+for i = 1:m
+    ch_id = CH_positions(i);
+    % If there are multiple BSs, take the closest one
+    dists = vecnorm(nodePositions(ch_id,:) - BS_positions, 2, 2);
+    dist_bs = min(dists);
+    wf3 = wf3 + dist_bs;
+end
+
+%% --- wf4: node degree (number of neighbors within radius R) ---
+R = 30;
+wf4 = 0;
+for i = 1:m
+    ch_id = CH_positions(i);
+    count = 0;
+    for j = 1:N
+        if j ~= ch_id
+            if norm(nodePositions(ch_id,:) - nodePositions(j,:)) <= R
+                count = count + 1;
+            end
+        end
+    end
+    wf4 = wf4 + count;
+end
+
+%% --- wf5: node centrality (spatial distribution of neighbors) ---
+wf5 = 0;
+for i = 1:m
+    ch_id = CH_positions(i);
+    neighbors = [];
+
+    for j = 1:N
+        if j ~= ch_id && norm(nodePositions(ch_id,:) - nodePositions(j,:)) <= R
+            neighbors = [neighbors; nodePositions(j,:)];
+        end
+    end
+
+    n_i = size(neighbors,1);
+    if n_i > 0
+        sum_dist2 = sum(vecnorm(neighbors - nodePositions(ch_id,:), 2, 2).^2);
+        wf5 = wf5 + (sum_dist2 / n_i) / networkDim;
+    else
+        wf5 = wf5 + 1e3; % Penalty for isolated CH
+    end
+end
+
+%% --- Additional Energy Penalty: CH → BS transmission cost (optional) ---
+energy_penalty = 0;
+for i = 1:m
+    ch_id = CH_positions(i);
+    dist_to_bs = min(vecnorm(nodePositions(ch_id,:) - BS_positions, 2, 2));
+
+    if dist_to_bs < d0
+        Etx_bs = Eelec * packetSize + xi_free * packetSize * dist_to_bs^2;
+    else
+        Etx_bs = Eelec * packetSize + Eamp * packetSize * dist_to_bs^4;
+    end
+
+    energy_penalty = energy_penalty + Etx_bs;
+end
+
+%% --- Final Fitness Value ---
+fitness = weights(1)*wf1 + weights(2)*wf2 + ...
+          weights(3)*wf3 + weights(4)*wf4 + ...
+          weights(5)*wf5 + energy_penalty;
+
+end

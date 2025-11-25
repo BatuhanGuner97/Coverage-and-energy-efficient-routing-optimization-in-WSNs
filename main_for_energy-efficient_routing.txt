@@ -1,0 +1,137 @@
+clc; clear all; close all;
+pkg load statistics;   % Required if Puma uses unifrnd, rand functions, etc.
+
+% --- Network Parameters ---
+networkDim = 100;          % Network area (meters)
+N = 50;                    % Number of nodes
+
+BS_positions = [100, 50; 100 100]; % Base station coordinates
+InitialEnergy = 1.5;       % Initial energy per node (J)
+
+% --- Energy Parameters ---
+packetSize = 4000;
+Eelec = 50e-9;
+Eamp = 0.0013e-12;
+xi_free = 10e-12;
+d0 = 35;
+
+% --- CH Percentage ---
+CHpercent = 0.15;
+m = round(N * CHpercent);
+
+% --- Dimensional bounds ---
+dim = m;
+lb = ones(1, dim);
+ub = N * ones(1, dim);
+
+% --- Node Positions ---
+nodePositions = networkDim * rand(N,2);
+
+% Display node IDs (visualization turned off for GitHub version)
+for i = 1:N
+    text(nodePositions(i,1)+1, nodePositions(i,2), num2str(i), "fontsize", 8);
+end
+
+% --- Initial Node Energy ---
+nodeEnergy = InitialEnergy * ones(N,1);
+
+% --- Weight Parameters ---
+weights = [0.25 0.25 0.20 0.15 0.15];
+
+% --- Objective Function ---
+CostFunction = @(CH_vector) ObjectiveFunction( ...
+    round(CH_vector), nodePositions, BS_positions, nodeEnergy, ...
+    networkDim, weights, packetSize, Eelec, Eamp, xi_free, d0, N);
+
+% --- Puma Optimizer Parameters ---
+nSol = 30;
+MaxIter = 500;
+
+% --- Puma Algorithm Execution ---
+[Puma_X, Puma_C, Convergence] = Puma(nSol, MaxIter, lb, ub, dim, CostFunction);
+
+% --- Results ---
+disp("Optimal CH IDs:");
+disp(round(Puma_X));
+printf("Best objective function value: %.6f\n", Puma_C);
+
+% --- Network Lifetime Simulation ---
+maxRounds = 7500;
+CH_IDs = round(Puma_X);
+
+aliveNodes = zeros(1,maxRounds);
+totalEnergy = zeros(1,maxRounds);
+deadNodes = zeros(1,maxRounds);
+deathRound = zeros(1,N);
+
+for r = 1:maxRounds
+    for i = 1:N
+
+        if nodeEnergy(i) > 0
+
+            if any(CH_IDs == i)
+                % CH transmitting to BS
+                dist_to_bs = sqrt(sum((nodePositions(i,:) - BS_positions).^2));
+
+                if dist_to_bs < d0
+                    Etx = Eelec * packetSize + xi_free * packetSize * (dist_to_bs^2);
+                else
+                    Etx = Eelec * packetSize + Eamp * packetSize * (dist_to_bs^4);
+                end
+
+                nodeEnergy(i) -= Etx;
+
+            else
+                % Normal node transmitting to nearest CH
+                dists = sqrt(sum((nodePositions(i,:) - nodePositions(CH_IDs,:)).^2, 2));
+                [~, idx] = min(dists);
+                ch = CH_IDs(idx);
+                dist_to_ch = dists(idx);
+
+                if dist_to_ch < d0
+                    Etx = Eelec * packetSize + xi_free * packetSize * (dist_to_ch^2);
+                else
+                    Etx = Eelec * packetSize + Eamp * packetSize * (dist_to_ch^4);
+                end
+
+                nodeEnergy(i) -= Etx;
+
+                % CH receives the data
+                if nodeEnergy(ch) > 0
+                    nodeEnergy(ch) -= Eelec * packetSize;
+                end
+            end
+        end
+
+        % Mark node death round
+        if nodeEnergy(i) <= 0 && deathRound(i) == 0
+            deathRound(i) = r;
+        end
+
+    end
+
+    aliveNodes(r) = sum(nodeEnergy > 0);
+    deadNodes(r) = N - aliveNodes(r);
+    totalEnergy(r) = sum(nodeEnergy(nodeEnergy > 0));
+
+    if aliveNodes(r) == 0
+        aliveNodes(r:end) = 0;
+        deadNodes(r:end) = N;
+        totalEnergy(r:end) = 0;
+        break;
+    end
+end
+
+% --- First Dead Node ---
+firstDeadRound = find(aliveNodes < N, 1);
+if isempty(firstDeadRound)
+    disp("No node died during simulation.");
+else
+    printf("First node died at round %d.\n", firstDeadRound);
+end
+
+% --- Death Rounds of Each Node ---
+printf("\nNode death rounds:\n");
+for i = 1:N
+    printf("Node %3d --> %5d. round\n", i, deathRound(i));
+end

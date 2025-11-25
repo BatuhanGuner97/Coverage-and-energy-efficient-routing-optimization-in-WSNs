@@ -1,0 +1,52 @@
+clear all; close all; clc
+
+%% Problem Definition
+global Region Region_Size Nsensors SensRange CommRange PenaltyCoef Area
+
+Region_Size = 160;
+Region = ones(Region_Size);     % Assume every pixel is coverable
+Nsensors = 60;
+SensRange = 10;
+CommRange = 20;
+PenaltyCoef = 1;
+Area = sum(Region(:));
+
+%% Puma (SFOA-based) Parameters
+Npop = 50;
+Max_it = 500;
+nD = 2 * Nsensors;
+lb = ones(1, nD);                     % Lower bound for decision variables
+ub = Region_Size * ones(1, nD);       % Upper bound for decision variables
+
+fobj = @Calculate_Cost;
+
+tic;
+[Puma_X, Puma_C, Convergence, CoverageCurve] = Puma(Npop, Max_it, lb, ub, nD, fobj);
+elapsedTime = toc;
+
+fprintf('Total computation time: %.2f seconds\n', elapsedTime);
+
+%% Convergence Plots
+figure;
+subplot(2,1,1)
+plot(Convergence, 'LineWidth', 2);
+xlabel('Iteration');
+ylabel('Best Fitness');
+title('POA Convergence Curve');
+grid on;
+
+subplot(2,1,2)
+plot(CoverageCurve, 'r', 'LineWidth', 2);
+xlabel('Iteration');
+ylabel('Coverage Rate');
+title('Coverage Curve');
+grid on;
+
+%% Final Coverage Rate
+[~, finalRate] = Calculate_Cost(Puma_X);
+fprintf("Final coverage rate: %.2f%%\n", finalRate * 100);
+
+%% Visualization of Final Deployment
+figure;
+DrawFinalResult(Puma_X, SensRange, CommRange, Region_Size);
+title(sprintf('Optimal Sensor Placement (Coverage Rate: %.2f%%)', finalRate * 100));

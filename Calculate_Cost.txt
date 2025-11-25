@@ -1,0 +1,95 @@
+function [cost, Rate] = Calculate_Cost(position)
+
+    %% Problem Parameters (Global)
+    global Region Region_Size Nsensors SensRange CommRange PenaltyCoef Area
+
+    % 3D matrices to store coverage and communication maps
+    cover = zeros(Region_Size, Region_Size, Nsensors);
+    comm = zeros(Region_Size, Region_Size, Nsensors);
+
+    % Sensor coordinates (numeric matrix, not a cell)
+    Sensors = zeros(Nsensors, 2);
+
+    %% Extract sensor coordinates from decision vector
+    for i = 1:Nsensors
+        x = round(position(2*i - 1));
+        y = round(position(2*i));
+
+        % Boundary correction
+        x = min(max(x, 1), Region_Size);
+        y = min(max(y, 1), Region_Size);
+
+        Sensors(i, :) = [x, y];
+    end
+
+    %% Coverage Computation
+    for s = 1:Nsensors
+        x0 = Sensors(s, 1);
+        y0 = Sensors(s, 2);
+
+        % Grid
+        [x, y] = meshgrid(1:Region_Size);
+
+        % Coverage cone parameters (full circle)
+        theta1 = -180; theta2 = 180;
+        r_min = 0; 
+        r_max = SensRange;
+
+        % Coverage function (logical mask)
+        f = @(x0, y0, r_max, r_min, t1, t2) ...
+            (x - x0).^2 + (y - y0).^2 <= r_max^2 & ...
+            (x - x0).^2 + (y - y0).^2 >= r_min^2 & ...
+            atan2(y - y0, x - x0) >= t1 & ...
+            atan2(y - y0, x - x0) <= t2;
+
+        % Apply mask and multiply by region (to exclude blocked cells)
+        cover(:,:,s) = f(x0, y0, r_max, r_min, theta1, theta2) .* Region;
+    end
+
+    % Total covered area (union of all sensors)
+    TotalCover = any(cover, 3);
+    Rate = sum(TotalCover(:)) / Area;
+
+    %% Communication Computation
+    for s = 1:Nsensors
+        x0 = Sensors(s, 1);
+        y0 = Sensors(s, 2);
+
+        [x, y] = meshgrid(1:Region_Size);
+
+        theta1 = -180; theta2 = 180;
+        r_min = 0; 
+        r_max = CommRange;
+
+        f = @(x0, y0, r_max, r_min, t1, t2) ...
+            (x - x0).^2 + (y - y0).^2 <= r_max^2 & ...
+            (x - x0).^2 + (y - y0).^2 >= r_min^2 & ...
+            atan2(y - y0, x - x0) >= t1 & ...
+            atan2(y - y0, x - x0) <= t2;
+
+        mask = f(x0, y0, r_max, r_min, theta1, theta2);
+        mask(x0, y0) = 0;   % A node cannot communicate with itself
+
+        comm(:,:,s) = mask .* Region;
+    end
+
+    % Union of communication zones
+    TotalCommunicate = any(comm, 3);
+
+    %% Count sensors that cannot communicate with any other sensor
+    uncoveredSensors = 0;
+    for s = 1:Nsensors
+        x = Sensors(s, 1);
+        y = Sensors(s, 2);
+        if TotalCommunicate(x, y) == 0
+            uncoveredSensors = uncoveredSensors + 1;
+        end
+    end
+
+    % Communication penalty
+    Penalty = uncoveredSensors / Nsensors;
+
+    %% Final Cost Function
+    cost = (1 / Rate) + (PenaltyCoef * Penalty);
+
+end
